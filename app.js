@@ -1,12 +1,18 @@
 // ============================================================
 //  JUDO TRAINER — plain JavaScript, no install, no build step.
-//  Sections: helpers · spaced repetition · filters · session
-//  builder · Library · Flashcards · Memory · Quiz · navigation
+//  Sections: data · helpers · video · spaced repetition · filters ·
+//  session builder · Library · Flashcards · Memory · Quiz · navigation
 // ============================================================
 
+// ---------- data ----------
 const T = window.TECHNIQUES || [];
+const NOTES = window.MY_NOTES || {};
+T.forEach(t => { t.notes = NOTES[t.id] || ''; t.videos = t.videos || []; });
 const byId = Object.fromEntries(T.map(t => [t.id, t]));
-const BELTS = ['white', 'yellow', 'orange', 'green', 'blue', 'brown', 'black'];
+const GRADES = window.GRADES || [...new Set(T.map(t => t.grade))];
+const DIFF = ['', 'Beginner', 'Intermediate', 'Advanced'];
+// Belt colour shown next to each grade. Adjust to your federation's system.
+const GRADE_COLOR = { '6th kyu': 'yellow', '5th kyu': 'orange', '4th kyu': 'green', '3rd kyu': 'blue', '2nd kyu': 'brown', '1st kyu': 'brown', '1st dan': 'black' };
 const DAY = 864e5; // one day in milliseconds
 
 // ---------- small helpers ----------
@@ -15,18 +21,27 @@ const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const uniq = a => [...new Set(a.filter(Boolean))];
 const shuffle = a => { a = [...a]; for (let i = a.length - 1; i > 0; i--) { const j = Math.random() * (i + 1) | 0; [a[i], a[j]] = [a[j], a[i]]; } return a; };
+const pickOne = a => a[Math.random() * a.length | 0];
+const plain = s => String(s).toLowerCase().replace(/[-\s]/g, ''); // "O-Soto" and "osoto" match
+const hasVideo = t => t.videos.length > 0;
 const store = {
   get(k, d) { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } },
   set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch { } }
 };
+const gradeTag = t => t.grade ? `<span class="tag belt belt-${GRADE_COLOR[t.grade] || 'none'}">${esc(t.grade)}</span>` : '';
 
-// Video: empty → placeholder, YouTube link → embed, anything else → <video>
-function media(t, small = false) {
-  const v = t.video || '';
-  if (!v) return `<div class="novideo">No video yet</div>`;
-  const yt = v.match(/(?:youtu\.be\/|v=|embed\/|shorts\/)([\w-]{11})/);
-  if (yt) return `<div class="vid"><iframe src="https://www.youtube-nocookie.com/embed/${yt[1]}?autoplay=1&mute=1&loop=1&playlist=${yt[1]}&controls=${small ? 0 : 1}" allow="autoplay; fullscreen" loading="lazy"></iframe></div>`;
-  return `<div class="vid"><video src="${esc(v)}" autoplay loop muted playsinline ${small ? '' : 'controls'}></video></div>`;
+// ---------- video ----------
+// i: which of the technique's videos · play: autoplay muted on loop
+// quiz: cover YouTube's title bar so it doesn't give away the answer
+function media(t, { i = 0, play = false, quiz = false } = {}) {
+  const v = t.videos[i];
+  if (!v) return `<div class="novideo">No video</div>`;
+  if (v.src) return `<div class="vid"><video src="${esc(v.src)}" ${play ? 'autoplay muted loop' : ''} playsinline controls></video></div>`;
+  const params = ['rel=0', 'playsinline=1', 'modestbranding=1'];
+  if (play) params.push('autoplay=1', 'mute=1', 'loop=1', 'playlist=' + v.yt);
+  if (quiz) params.push('controls=0');
+  return `<div class="vid ${quiz ? 'hide-title' : ''}"><iframe src="https://www.youtube-nocookie.com/embed/${esc(v.yt)}?${params.join('&')}"
+    title="${quiz ? 'Video' : esc(v.title)}" allow="autoplay; encrypted-media; fullscreen; picture-in-picture" allowfullscreen loading="lazy"></iframe></div>`;
 }
 
 // ---------- spaced repetition (simplified SM-2, like classic Anki) ----------
@@ -63,30 +78,32 @@ function status(id) {
 function updateDue() { $('#due').textContent = T.filter(t => isDue(t.id)).length + ' due'; }
 
 // ---------- filters (shared by the library and every game) ----------
-const filters = { q: '', category: '', subcategory: '', belt: '', maxDiff: 5 };
+const filters = { q: '', category: '', subcategory: '', grade: '', maxDiff: 3 };
 const excluded = new Set(); // techniques you unticked in the session builder
 
 function applyFilters() {
-  const q = filters.q.toLowerCase();
+  const q = plain(filters.q);
   return T.filter(t =>
-    (!q || (t.name + ' ' + t.translation + ' ' + t.notes).toLowerCase().includes(q)) &&
+    (!q || plain([t.name, t.translation, t.kanji, t.notes].join(' ')).includes(q)) &&
     (!filters.category || t.category === filters.category) &&
     (!filters.subcategory || t.subcategory === filters.subcategory) &&
-    (!filters.belt || BELTS.indexOf(t.belt) <= BELTS.indexOf(filters.belt)) &&
+    (!filters.grade || GRADES.indexOf(t.grade) <= GRADES.indexOf(filters.grade)) &&
     t.difficulty <= filters.maxDiff);
 }
+function resetFilters() { Object.assign(filters, { q: '', category: '', subcategory: '', grade: '', maxDiff: 3 }); }
 
 function filterBar() {
   const cats = uniq(T.map(t => t.category));
   const subs = uniq(T.filter(t => !filters.category || t.category === filters.category).map(t => t.subcategory));
-  const belts = BELTS.filter(b => T.some(t => t.belt === b));
-  const opt = (arr, sel, all) => `<option value="">${all}</option>` + arr.map(v => `<option ${v === sel ? 'selected' : ''}>${esc(v)}</option>`).join('');
+  const grades = GRADES.filter(g => T.some(t => t.grade === g));
+  const opt = (arr, sel, all, label = v => v) => `<option value="">${all}</option>` +
+    arr.map(v => `<option value="${esc(v)}" ${v === sel ? 'selected' : ''}>${esc(label(v))}</option>`).join('');
   return `<div class="filters">
-    <input type="search" data-f="q" placeholder="Search…" value="${esc(filters.q)}">
+    <input type="search" data-f="q" placeholder="Search name, English, kanji…" value="${esc(filters.q)}">
     <select data-f="category">${opt(cats, filters.category, 'All categories')}</select>
     <select data-f="subcategory">${opt(subs, filters.subcategory, 'All groups')}</select>
-    <select data-f="belt">${opt(belts, filters.belt, 'All belts')}</select>
-    <select data-f="maxDiff">${[1, 2, 3, 4, 5].map(n => `<option value="${n}" ${n === filters.maxDiff ? 'selected' : ''}>Difficulty ≤ ${n}</option>`).join('')}</select>
+    <select data-f="grade">${opt(grades, filters.grade, 'All grades', g => 'Up to ' + g)}</select>
+    <select data-f="maxDiff">${[3, 2, 1].map(n => `<option value="${n}" ${n === filters.maxDiff ? 'selected' : ''}>${['', 'Beginner only', 'Up to intermediate', 'All levels'][n]}</option>`).join('')}</select>
   </div>`;
 }
 
@@ -101,12 +118,11 @@ function bindFilters(root, draw) {
 }
 
 // ---------- session builder: pick which cards a game may use ----------
-// need(t, opts) → false greys out techniques the game can't use (e.g. no video)
+// need(t, opts) → false greys out techniques the chosen mode can't use
 function builder(root, { title, extra = '', min = 1, need = () => true, onStart }) {
-  root.innerHTML = `<h2>${title}</h2><div class="fbar"></div>
+  root.innerHTML = `<h2>${title}</h2><div class="opts">${extra}</div><div class="fbar"></div>
     <div class="row"><button class="ghost" data-a="all">Select all</button><button class="ghost" data-a="none">Select none</button><span class="muted count"></span></div>
     <div class="pick"></div>
-    <div class="opts">${extra}</div>
     <button class="primary start">Start</button>`;
   const getOpts = () => Object.fromEntries($$('.opts [name]', root).map(el => [el.name, el.value]));
   const pool = () => { const o = getOpts(); return applyFilters().filter(t => !excluded.has(t.id) && need(t, o)); };
@@ -119,7 +135,7 @@ function builder(root, { title, extra = '', min = 1, need = () => true, onStart 
     if (full) { $('.fbar', root).innerHTML = filterBar(); bindFilters(root, draw); }
     const o = getOpts();
     $('.pick', root).innerHTML = applyFilters().map(t =>
-      `<label class="chip ${need(t, o) ? '' : 'off'}" title="${need(t, o) ? '' : 'Not usable in this mode'}"><input type="checkbox" value="${t.id}" ${excluded.has(t.id) ? '' : 'checked'}>${esc(t.name)}</label>`).join('');
+      `<label class="chip ${need(t, o) ? '' : 'off'}" title="${need(t, o) ? esc(t.translation) : 'Not usable in this mode'}"><input type="checkbox" value="${t.id}" ${excluded.has(t.id) ? '' : 'checked'}>${esc(t.name)}</label>`).join('');
     count();
   };
   root.onchange = e => {
@@ -135,6 +151,27 @@ function builder(root, { title, extra = '', min = 1, need = () => true, onStart 
 // ============================================================
 //  LIBRARY
 // ============================================================
+function detail(t) {
+  const link = id => byId[id] ? `<button class="chip link" data-go="${id}">${esc(byId[id].name)}</button>` : '';
+  const links = (label, ids) => ids?.length ? `<div class="links"><span class="muted">${label}</span>${ids.map(link).join('')}</div>` : '';
+  const sec = (title, html) => html ? `<details class="sec"><summary>${title}</summary><div>${html}</div></details>` : '';
+  const ul = items => items.length ? `<ul>${items.join('')}</ul>` : '';
+  return `
+    <div class="player">${media(t)}</div>
+    ${t.videos.length > 1 ? `<div class="vtabs">${t.videos.map((v, i) =>
+      `<button class="vt ${i ? '' : 'on'}" data-v="${i}" title="${esc(v.title)}">${esc(v.channel || 'Video ' + (i + 1))}</button>`).join('')}</div>` : ''}
+    ${t.notes ? `<p class="mynote">📝 ${esc(t.notes)}</p>` : ''}
+    <p>${esc(t.overview)}</p>
+    ${sec('Kuzushi · Tsukuri · Kake', t.phases.map(p => `<p><b>${esc(p.label)}</b><br>${esc(p.text)}</p>`).join(''))}
+    ${sec('Step by step', t.steps.length ? `<ol>${t.steps.map(s => `<li><b>${esc(s.title)}</b><br>${esc(s.text)}</li>`).join('')}</ol>` : '')}
+    ${sec('Key principles', ul(t.principles.map(p => `<li>${esc(p)}</li>`)))}
+    ${sec('Common mistakes', ul(t.mistakes.map(m => `<li><b>✗ ${esc(m.mistake)}</b><br>✓ ${esc(m.fix)}</li>`)))}
+    ${sec('When to use', t.when ? `<p>${esc(t.when)}</p>` : '')}
+    ${links('Set up with', t.setups)}${links('Follow up with', t.followUps)}${links('Countered by', t.counters)}${links('Related', t.related)}
+    <p class="muted small">${esc(t.category)} › ${esc(t.subcategory)} · taught at ${esc(t.grades.join(', ') || '—')}
+      ${t.source ? ` · Source: <a href="${esc(t.source)}" target="_blank" rel="noopener">judolearn.com</a>` : ''}</p>`;
+}
+
 function library(root) {
   root.innerHTML = `<div class="fbar"></div><p class="muted count"></p><div class="list"></div>`;
   const draw = full => {
@@ -142,22 +179,43 @@ function library(root) {
     const list = applyFilters();
     $('.count', root).textContent = `${list.length} of ${T.length} techniques`;
     $('.list', root).innerHTML = list.map(t => `
-      <details data-id="${t.id}">
+      <details class="tech" data-id="${t.id}">
         <summary>
-          <span><b>${esc(t.name)}</b> <span class="muted">${esc(t.translation)}</span></span>
+          <span class="title"><span class="kanji">${esc(t.kanji)}</span><span><b>${esc(t.name)}</b><br><span class="muted">${esc(t.translation)}</span></span></span>
           <span class="tags">
             <span class="tag">${esc(t.subcategory)}</span>
-            <span class="tag belt belt-${t.belt}">${t.belt}</span>
-            <span class="tag" title="Difficulty">${'●'.repeat(t.difficulty)}${'○'.repeat(5 - t.difficulty)}</span>
+            ${gradeTag(t)}
+            <span class="tag d${t.difficulty}">${DIFF[t.difficulty]}</span>
             <span class="tag st-${status(t.id).split(' ')[0]}">${status(t.id)}</span>
           </span>
         </summary>
-        <div class="body"><div class="m"></div><p>${esc(t.notes)}</p><p class="muted">${esc(t.category)} › ${esc(t.subcategory)}</p></div>
+        <div class="body"></div>
       </details>`).join('');
-    // load a video only while its entry is open (keeps the page fast)
-    $$('details', root).forEach(d => d.ontoggle = () => { $('.m', d).innerHTML = d.open ? media(byId[d.dataset.id]) : ''; });
+    // Build the detail only while an entry is open, and keep just one open (keeps it fast)
+    $$('details.tech', root).forEach(d => d.ontoggle = () => {
+      if (d.open) { $$('details.tech[open]', root).forEach(o => { if (o !== d) o.open = false; }); $('.body', d).innerHTML = detail(byId[d.dataset.id]); }
+      else $('.body', d).innerHTML = '';
+    });
+  };
+  root.onclick = e => {
+    const vt = e.target.closest('.vt');
+    if (vt) {
+      const d = vt.closest('details.tech');
+      $('.player', d).innerHTML = media(byId[d.dataset.id], { i: +vt.dataset.v });
+      $$('.vt', d).forEach(b => b.classList.toggle('on', b === vt));
+    }
+    const go = e.target.closest('[data-go]');
+    if (go) openTechnique(root, draw, go.dataset.go);
   };
   draw(true);
+}
+
+// Jump to another technique (from "Related", "Countered by", …)
+function openTechnique(root, draw, id) {
+  if (!applyFilters().some(t => t.id === id)) { resetFilters(); draw(true); }
+  const d = $(`details.tech[data-id="${id}"]`, root);
+  d.open = true;
+  d.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
 // ============================================================
@@ -167,11 +225,12 @@ function flashcards(root) {
   builder(root, {
     title: 'Flashcards',
     extra: `<label>Show <select name="mode">
-              <option value="translation">Translation → name</option>
+              <option value="translation">English → name</option>
+              <option value="kanji">Kanji → name</option>
               <option value="video">Video → name</option>
               <option value="name">Name → picture it</option></select></label>
             <label>New cards <select name="newLimit"><option>5</option><option selected>10</option><option>20</option><option value="999">All</option></select></label>`,
-    need: (t, o) => o.mode !== 'video' || !!t.video,
+    need: (t, o) => o.mode !== 'video' || hasVideo(t),
     onStart: (pool, o) => {
       const due = pool.filter(t => isDue(t.id)).sort((a, b) => srs[a.id].due - srs[b.id].due);
       const fresh = shuffle(pool.filter(t => !srs[t.id])).slice(0, +o.newLimit);
@@ -196,9 +255,12 @@ function runFlash(root, queue, o) {
       return;
     }
     revealed = false;
-    const front = o.mode === 'video' ? media(t)
-      : o.mode === 'translation' ? `<p class="big">${esc(t.translation)}</p>`
-      : `<p class="big">${esc(t.name)}</p><p class="muted">Picture the technique, then check.</p>`;
+    const front = {
+      video: media(t, { play: true, quiz: true }),
+      translation: `<p class="big">${esc(t.translation)}</p>`,
+      kanji: `<p class="big kanji-big">${esc(t.kanji)}</p>`,
+      name: `<p class="big">${esc(t.name)}</p><p class="muted center">Picture the technique, then check.</p>`
+    }[o.mode];
     root.innerHTML = `<p class="muted">${queue.length} left · ${srs[t.id] ? 'review' : 'new card'}</p>
       <div class="card">${front}<div class="back"></div></div>
       <div class="actions"><button class="primary reveal">Show answer <kbd>Space</kbd></button></div>`;
@@ -208,9 +270,11 @@ function runFlash(root, queue, o) {
     if (revealed) return;
     revealed = true;
     const t = queue[0];
-    $('.back', root).innerHTML = `<hr><h2>${esc(t.name)}</h2><p>${esc(t.translation)}</p>
-      ${o.mode !== 'video' ? media(t) : ''}<p>${esc(t.notes)}</p>
-      <p class="muted">${esc(t.category)} › ${esc(t.subcategory)} · ${t.belt} belt · difficulty ${t.difficulty}</p>`;
+    $('.back', root).innerHTML = `<hr><h2>${esc(t.name)} <span class="muted">${esc(t.kanji)}</span></h2>
+      <p>${esc(t.translation)} · ${esc(t.subcategory)} · ${DIFF[t.difficulty]}</p>
+      ${o.mode !== 'video' ? media(t, { play: true }) : ''}
+      ${t.notes ? `<p class="mynote">📝 ${esc(t.notes)}</p>` : ''}
+      ${t.principles.length ? `<ul class="small">${t.principles.slice(0, 3).map(p => `<li>${esc(p)}</li>`).join('')}</ul>` : ''}`;
     $('.actions', root).innerHTML = ['Again', 'Hard', 'Good', 'Easy'].map((l, i) =>
       `<button class="rate r${i + 1}" data-r="${i + 1}">${l} <kbd>${i + 1}</kbd><small>${fmtInterval(srs[t.id], i + 1)}</small></button>`).join('');
     $$('.rate', root).forEach(b => b.onclick = () => answer(+b.dataset.r));
@@ -223,6 +287,7 @@ function runFlash(root, queue, o) {
     show();
   };
   document.onkeydown = e => {
+    if (e.target.matches('input, select')) return;
     if (e.code === 'Space') { e.preventDefault(); reveal(); }
     else if (revealed && ['1', '2', '3', '4'].includes(e.key)) answer(+e.key);
   };
@@ -236,10 +301,11 @@ function memory(root) {
   builder(root, {
     title: 'Memory', min: 2,
     extra: `<label>Pairs <select name="pair">
-              <option value="translation">Name ↔ translation</option>
+              <option value="translation">Name ↔ English</option>
+              <option value="kanji">Name ↔ kanji</option>
               <option value="video">Name ↔ video</option></select></label>
             <label>Number of pairs <select name="n"><option>4</option><option selected>6</option><option>8</option><option>10</option><option>12</option></select></label>`,
-    need: (t, o) => o.pair !== 'video' || !!t.video,
+    need: (t, o) => o.pair !== 'video' || hasVideo(t),
     onStart: (pool, o) => runMemory(root, shuffle(pool).slice(0, +o.n), o)
   });
 }
@@ -250,10 +316,12 @@ function runMemory(root, picks, o) {
   const face = c => {
     const t = byId[c.id];
     if (c.side === 'a') return `<b>${esc(t.name)}</b>`;
-    return o.pair === 'video' ? media(t, true) : `<span>${esc(t.translation)}</span>`;
+    if (o.pair === 'video') return media(t, { play: true, quiz: true });
+    if (o.pair === 'kanji') return `<span class="kanji-card">${esc(t.kanji)}</span>`;
+    return `<span>${esc(t.translation)}</span>`;
   };
   root.innerHTML = `<p class="muted mstat"></p>
-    <div class="grid">${cards.map((c, i) => `<button class="mcard" data-i="${i}"><span class="face"></span></button>`).join('')}</div>`;
+    <div class="grid ${o.pair === 'video' ? 'wide' : ''}">${cards.map((c, i) => `<div class="mcard" role="button" tabindex="0" data-i="${i}"><span class="face"></span></div>`).join('')}</div>`;
   const stat = () => $('.mstat', root).textContent = `Moves: ${moves} · Pairs: ${found}/${picks.length}`;
   stat();
   root.onclick = e => {
@@ -275,7 +343,8 @@ function runMemory(root, picks, o) {
       }, 400);
     } else {
       stat(); lock = true;
-      setTimeout(() => { [b1, b2].forEach(x => { x.classList.remove('up'); $('.face', x).innerHTML = ''; }); lock = false; }, 1100);
+      setTimeout(() => { [b1, b2].forEach(x => { x.classList.remove('up'); $('.face', x).innerHTML = ''; }); lock = false; },
+        o.pair === 'video' ? 2500 : 1100); // videos stay open a bit longer
     }
   };
 }
@@ -287,11 +356,13 @@ function quiz(root) {
   builder(root, {
     title: 'Quiz', min: 4,
     extra: `<label>Question <select name="type">
-              <option value="translation">Translation → name</option>
+              <option value="translation">English → name</option>
+              <option value="kanji">Kanji → name</option>
               <option value="video">Video → name</option>
-              <option value="group">Name → group</option></select></label>
+              <option value="group">Name → group</option>
+              <option value="counter">Which technique counters it?</option></select></label>
             <label>Questions <select name="n"><option>5</option><option selected>10</option><option>20</option></select></label>`,
-    need: (t, o) => o.type !== 'video' || !!t.video,
+    need: (t, o) => o.type === 'video' ? hasVideo(t) : o.type === 'counter' ? t.counters.some(id => byId[id]) : true,
     onStart: (pool, o) => runQuiz(root, pool, o)
   });
 }
@@ -302,6 +373,11 @@ function runQuiz(root, pool, o) {
   order = order.slice(0, +o.n);
   let i = 0, score = 0;
   const missed = [];
+  // wrong answers: techniques from the same group first, so it's not too easy
+  const distractors = (t, exclude) => {
+    const others = T.filter(x => !exclude.includes(x.name));
+    return uniq([...shuffle(others.filter(x => x.subcategory === t.subcategory)), ...shuffle(others)].map(x => x.name));
+  };
   const next = () => {
     if (i >= order.length) {
       root.innerHTML = `<div class="card center"><h2>${score} / ${order.length}</h2>
@@ -310,17 +386,24 @@ function runQuiz(root, pool, o) {
       return;
     }
     const t = order[i];
-    let prompt, right, others;
+    let prompt, right, wrong;
     if (o.type === 'group') {
-      prompt = `<p class="big">${esc(t.name)}</p><p class="muted">Which group?</p>`;
+      prompt = `<p class="big">${esc(t.name)}</p><p class="muted center">Which group?</p>`;
       right = t.subcategory;
-      others = uniq(T.map(x => x.subcategory));
+      const subs = uniq(T.map(x => x.subcategory)).filter(s => s !== right);
+      const sameCat = uniq(T.filter(x => x.category === t.category).map(x => x.subcategory));
+      wrong = uniq([...shuffle(subs.filter(s => sameCat.includes(s))), ...shuffle(subs)]);
+    } else if (o.type === 'counter') {
+      const counters = t.counters.filter(id => byId[id]).map(id => byId[id].name);
+      prompt = `<p class="big">${esc(t.name)}</p><p class="muted center">Which of these is a counter to it?</p>`;
+      right = pickOne(counters);
+      wrong = shuffle(T.filter(x => x.id !== t.id && !counters.includes(x.name))).map(x => x.name);
     } else {
-      prompt = o.type === 'video' ? media(t) : `<p class="big">${esc(t.translation)}</p>`;
+      prompt = { video: media(t, { play: true, quiz: true }), kanji: `<p class="big kanji-big">${esc(t.kanji)}</p>`, translation: `<p class="big">${esc(t.translation)}</p>` }[o.type];
       right = t.name;
-      others = uniq(pool.map(x => x.name));
+      wrong = distractors(t, [t.name]);
     }
-    const options = shuffle([right, ...shuffle(others.filter(x => x !== right)).slice(0, 3)]);
+    const options = shuffle([right, ...wrong.slice(0, 3)]);
     root.innerHTML = `<p class="muted">Question ${i + 1} / ${order.length} · Score ${score}</p>
       <div class="card">${prompt}</div>
       <div class="choices">${options.map(x => `<button class="choice">${esc(x)}</button>`).join('')}</div>`;
@@ -330,7 +413,7 @@ function runQuiz(root, pool, o) {
       $$('.choice', root).forEach(x => { x.disabled = true; if (x.textContent === right) x.classList.add('ok'); });
       if (!ok) b.classList.add('bad');
       i++;
-      setTimeout(next, ok ? 700 : 1600);
+      setTimeout(next, ok ? 800 : 1800);
     });
   };
   next();

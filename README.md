@@ -1,62 +1,66 @@
 # Judo Trainer
 
-A small, fast learning game for judo techniques. Plain HTML/CSS/JavaScript: no install, no build step, no server code.
+A small, fast game for learning judo techniques. Plain HTML/CSS/JavaScript: no install, no build step, no server code.
+Technique data and videos come from [judolearn.com](https://judolearn.com); the videos are YouTube embeds.
 
 ## Files
 
 | File | What it is | Do you edit it? |
 |---|---|---|
-| `techniques.js` | Your technique dictionary | **Yes, this is where your content lives** |
+| `data/techniques.json` | The scraped data, exactly as scraped | Replace it when you re-scrape |
+| `convert.py` | Turns the scraped JSON into `techniques.js` | No, just run it |
+| `techniques.js` | Generated data the game loads | **No, it gets overwritten** |
+| `my-notes.js` | Your own notes per technique | **Yes** |
 | `app.js` | Game logic (library, flashcards, memory, quiz) | Only for new features |
 | `style.css` | Look and colors | If you want |
 | `index.html` | Page skeleton | Rarely |
-| `videos/` | Your own clips (create this folder) | Put your .mp4 files here |
 
 ## Run it
 
-- **Quick:** double-click `index.html`. Works with local videos.
-- **With YouTube embeds:** YouTube often blocks playback from a double-clicked file. Run a tiny local server in the folder instead:
-  `python -m http.server 8000` → open http://localhost:8000
-  (or the "Live Server" extension in VS Code).
+The videos are YouTube embeds, which don't play from a double-clicked file. Start a tiny local server in this folder:
 
-## Add a technique
-
-Copy one line in `techniques.js` and change it:
-
-```js
-{ id: "harai-tsurikomi-ashi", name: "Harai-tsurikomi-ashi", translation: "Lift-pull foot sweep",
-  category: "Nage-waza", subcategory: "Ashi-waza", belt: "blue", difficulty: 3,
-  video: "videos/harai-tsurikomi-ashi.mp4", notes: "Your own coaching points." },
+```
+python -m http.server 8000
 ```
 
-New categories, groups and belts show up in the filters automatically.
-Don't change an `id` later, because that's what learning progress is saved under.
+Then open http://localhost:8000. (The "Live Server" extension in VS Code works too.)
+Once it's on GitHub Pages, it just works from the link.
 
-**Videos:** 3–8 s, 720p, muted, MP4 (H.264) keeps each clip around 1–2 MB. HandBrake can batch-convert them.
-YouTube links (`https://youtu.be/...`) also work.
+## Update the data after re-scraping
+
+1. Replace `data/techniques.json` with the new file.
+2. Run `python convert.py`.
+3. Reload the page.
+
+Your notes and everyone's learning progress stay, as long as the technique slugs don't change.
+
+## Your own notes
+
+Add them to `my-notes.js`, keyed by the technique id (the last part of its judolearn.com URL):
+
+```js
+window.MY_NOTES = {
+  "seoi-nage": "Our sensei: turn in lower than you think.",
+};
+```
+
+Notes show up in the library, on flashcards and in search.
 
 ## Game modes
 
-- **Library:** browse and filter everything; open an entry for video and notes.
-- **Flashcards:** spaced repetition like Anki. Rate Again / Hard / Good / Easy (keys 1–4, Space reveals). Each rating sets when the card comes back.
-- **Memory:** match name ↔ translation or name ↔ video.
-- **Quiz:** multiple choice (translation → name, video → name, name → group).
+- **Library:** search and filter by category, group, grade and difficulty. Opening a technique shows its videos (tabs to switch between them), overview, kuzushi/tsukuri/kake, steps, principles, common mistakes, when to use, and clickable related techniques, set-ups, follow-ups and counters.
+- **Flashcards:** spaced repetition like Anki. Modes: English → name, kanji → name, video → name, name → picture it. Rate Again / Hard / Good / Easy (keys 1–4, Space reveals).
+- **Memory:** match name ↔ English, name ↔ kanji or name ↔ video.
+- **Quiz:** multiple choice. English → name, kanji → name, video → name, name → group, and "which technique counters it?". Wrong answers come from the same group, so it isn't too easy.
 
 Before every game you filter and tick exactly which techniques may appear.
+
+## Grades and belt colours
+
+Each technique is filed under the lowest grade judolearn lists for it. "Up to 4th kyu" shows everything taught up to and including 4th kyu.
+The belt colour per grade is set in `GRADE_COLOR` at the top of `app.js`. Adjust it to your federation's system.
 
 ## Progress
 
 Saved in each player's own browser (localStorage). Every friend has their own progress, and no accounts are needed.
 Clearing browser data resets it.
-
-## Share it with friends
-
-Upload the whole folder to a free static host:
-- **GitHub Pages:** new repository → upload files → Settings → Pages → Deploy from main branch.
-- **Netlify Drop:** drag the folder onto app.netlify.com/drop.
-
-Friends just open the link, on phone or PC.
-
-## Belts
-
-The belt levels in `techniques.js` are placeholders. Adjust them to your club's grading syllabus.
