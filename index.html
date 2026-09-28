@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Judo Trainer</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <h1>🥋 Judo Trainer</h1>
+    <span id="due" class="pill"></span>
+  </header>
+  <nav>
+    <button data-view="library">Library</button>
+    <button data-view="flashcards">Flashcards</button>
+    <button data-view="memory">Memory</button>
+    <button data-view="quiz">Quiz</button>
+  </nav>
+  <main id="main"></main>
+
+  <!-- 1. your technique list, 2. the game logic -->
+  <script src="techniques.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
