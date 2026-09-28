@@ -81,18 +81,19 @@ function updateDue() { $('#due').textContent = T.filter(t => isDue(t.id)).length
 const filters = { q: '', category: '', subcategory: '', grade: '', maxDiff: 3 };
 const excluded = new Set(); // techniques you unticked in the session builder
 
-function applyFilters() {
+// ignoreGroup: apply everything except the group (used for the counts on the group boxes)
+function applyFilters({ ignoreGroup = false } = {}) {
   const q = plain(filters.q);
   return T.filter(t =>
     (!q || plain([t.name, t.translation, t.kanji, t.notes].join(' ')).includes(q)) &&
     (!filters.category || t.category === filters.category) &&
-    (!filters.subcategory || t.subcategory === filters.subcategory) &&
+    (ignoreGroup || !filters.subcategory || t.subcategory === filters.subcategory) &&
     (!filters.grade || GRADES.indexOf(t.grade) <= GRADES.indexOf(filters.grade)) &&
     t.difficulty <= filters.maxDiff);
 }
-function resetFilters() { Object.assign(filters, { q: '', category: '', subcategory: '', grade: '', maxDiff: 3 }); }
 
-function filterBar() {
+// groups = false leaves out the category/group dropdowns (the library uses boxes for those)
+function filterBar(groups = true) {
   const cats = uniq(T.map(t => t.category));
   const subs = uniq(T.filter(t => !filters.category || t.category === filters.category).map(t => t.subcategory));
   const grades = GRADES.filter(g => T.some(t => t.grade === g));
@@ -100,8 +101,8 @@ function filterBar() {
     arr.map(v => `<option value="${esc(v)}" ${v === sel ? 'selected' : ''}>${esc(label(v))}</option>`).join('');
   return `<div class="filters">
     <input type="search" data-f="q" placeholder="Search name, English, kanji…" value="${esc(filters.q)}">
-    <select data-f="category">${opt(cats, filters.category, 'All categories')}</select>
-    <select data-f="subcategory">${opt(subs, filters.subcategory, 'All groups')}</select>
+    ${groups ? `<select data-f="category">${opt(cats, filters.category, 'All categories')}</select>
+    <select data-f="subcategory">${opt(subs, filters.subcategory, 'All groups')}</select>` : ''}
     <select data-f="grade">${opt(grades, filters.grade, 'All grades', g => 'Up to ' + g)}</select>
     <select data-f="maxDiff">${[3, 2, 1].map(n => `<option value="${n}" ${n === filters.maxDiff ? 'selected' : ''}>${['', 'Beginner only', 'Up to intermediate', 'All levels'][n]}</option>`).join('')}</select>
   </div>`;
@@ -151,6 +152,116 @@ function builder(root, { title, extra = '', min = 1, need = () => true, onStart 
 // ============================================================
 //  LIBRARY
 // ============================================================
+
+// Text and colours for categories and groups. Edit freely.
+const CAT_INFO = {
+  'Nage-Waza': { kanji: '投技', en: 'Throwing techniques', text: 'All standing throws. Tori breaks uke\'s balance (kuzushi), fits in (tsukuri) and executes the throw (kake). The groups are sorted by what does most of the work: hands, hips, legs, or a sacrifice fall.' },
+  'Katame-Waza': { kanji: '固技', en: 'Grappling techniques', text: 'Groundwork. Holding uke on their back (osaekomi), strangles (shime) and joint locks (kansetsu): the techniques that decide the fight on the mat.' },
+};
+const SUB_INFO = {
+  'Te-Waza': { kanji: '手技', en: 'Hand techniques', color: '#e0604a' },
+  'Koshi-Waza': { kanji: '腰技', en: 'Hip techniques', color: '#d67f35' },
+  'Ashi-Waza': { kanji: '足技', en: 'Foot and leg techniques', color: '#3d8a5b' },
+  'Ma-Sutemi-Waza': { kanji: '真捨身技', en: 'Rear sacrifice techniques', color: '#7b5ca8' },
+  'Yoko-Sutemi-Waza': { kanji: '横捨身技', en: 'Side sacrifice techniques', color: '#2b8a99' },
+  'Osaekomi-Waza': { kanji: '抑込技', en: 'Pins and hold-downs', color: '#3b6db3' },
+  'Shime-Waza': { kanji: '絞技', en: 'Strangles', color: '#a8436a' },
+  'Kansetsu-Waza': { kanji: '関節技', en: 'Joint locks', color: '#86673a' },
+};
+const subInfo = s => SUB_INFO[s] || { kanji: '', en: '', color: '#6b7280' };
+// traditional order (as listed above); anything unknown goes last
+const orderOf = (list, v) => { const i = list.indexOf(v); return i < 0 ? 99 : i; };
+const byOrder = keys => (a, b) => orderOf(keys, a) - orderOf(keys, b);
+const bySubThenName = (a, b) => orderOf(Object.keys(SUB_INFO), a.subcategory) - orderOf(Object.keys(SUB_INFO), b.subcategory) || a.name.localeCompare(b.name);
+let libScroll = 0; // remembers where you were in the list
+
+function statusTag(t) {
+  const s = status(t.id);
+  return s === 'new' ? '' : `<span class="tag st-${s.split(' ')[0]}">${s}</span>`;
+}
+
+function card(t) {
+  return `<button class="tcard" data-id="${t.id}" style="--c:${subInfo(t.subcategory).color}">
+    <span class="tc-top"><span class="tpill">${esc(t.subcategory)}</span><span class="tc-kanji">${esc(t.kanji)}</span></span>
+    <span class="tc-body">
+      <span class="tc-name">${esc(t.name)}</span>
+      <span class="muted small">${esc(t.translation)}</span>
+      <span class="tags">${gradeTag(t)}<span class="tag d${t.difficulty}">${DIFF[t.difficulty]}</span>${statusTag(t)}</span>
+    </span>
+  </button>`;
+}
+
+function library(root) {
+  root.innerHTML = `<div class="lib-top"></div><div class="fbar"></div><h3 class="lib-h"></h3><div class="cards"></div>`;
+  const draw = () => {
+    const cat = filters.category, sub = filters.subcategory, info = CAT_INFO[cat];
+    const cats = uniq(T.map(t => t.category)).sort(byOrder(Object.keys(CAT_INFO)));
+    const subs = uniq(T.filter(t => !cat || t.category === cat).map(t => t.subcategory)).sort(byOrder(Object.keys(SUB_INFO)));
+    const base = applyFilters({ ignoreGroup: true });
+    $('.lib-top', root).innerHTML = `
+      <div class="cattabs">${['', ...cats].map(c =>
+        `<button class="ctab ${c === cat ? 'on' : ''}" data-cat="${esc(c)}">${c ? `${esc(c)} <span class="k">${esc(CAT_INFO[c]?.kanji || '')}</span>` : 'All'}</button>`).join('')}</div>
+      <h2 class="cat-title">${cat ? esc(cat) : 'All techniques'}${info ? ` <span class="k">${info.kanji}</span>` : ''}</h2>
+      ${info ? `<p class="cat-en">${info.en}</p>` : ''}
+      <p class="cat-text">${info ? info.text : 'Pick a category above, or a group below, to narrow it down.'}</p>
+      <div class="subboxes">${subs.map(s => {
+        const i = subInfo(s), n = base.filter(t => t.subcategory === s).length;
+        return `<button class="subbox ${s === sub ? 'on' : ''}" data-sub="${esc(s)}" style="--c:${i.color}">
+          <span><b>${esc(s)}</b> <span class="k">${i.kanji}</span></span>
+          <span class="muted small">${esc(i.en)} · ${n} technique${n === 1 ? '' : 's'}</span></button>`;
+      }).join('')}</div>`;
+    const list = applyFilters().sort(bySubThenName);
+    $('.lib-h', root).textContent = `${sub || cat || 'All'} techniques (${list.length})`;
+    $('.cards', root).innerHTML = list.map(card).join('') || '<p class="muted">Nothing matches these filters.</p>';
+  };
+  root.onclick = e => {
+    const c = e.target.closest('[data-cat]'), s = e.target.closest('[data-sub]'), t = e.target.closest('.tcard');
+    if (c) { filters.category = c.dataset.cat; filters.subcategory = ''; draw(); }
+    else if (s) {
+      filters.subcategory = filters.subcategory === s.dataset.sub ? '' : s.dataset.sub; // click again to deselect
+      if (filters.subcategory) filters.category = T.find(x => x.subcategory === filters.subcategory).category;
+      draw();
+    }
+    else if (t) { libScroll = window.scrollY; showDetail(root, t.dataset.id); }
+  };
+  $('.fbar', root).innerHTML = filterBar(false);
+  bindFilters(root, draw);
+  draw();
+}
+
+// ---------- one technique on its own page ----------
+function showDetail(root, id) {
+  const t = byId[id], i = subInfo(t.subcategory);
+  root.innerHTML = `
+    <div class="crumbs">
+      <button class="ghost back">← Back</button>
+      <span class="muted small"><a href="#" data-crumb="">Techniques</a> › <a href="#" data-crumb="${esc(t.category)}">${esc(t.category)}</a> › <a href="#" data-crumb="${esc(t.category)}|${esc(t.subcategory)}">${esc(t.subcategory)}</a></span>
+    </div>
+    <div class="hero" style="--c:${i.color}">
+      <span class="hero-k">${esc(t.kanji)}</span>
+      <span class="tpill">${esc(t.subcategory)} · ${esc(i.en)}</span>
+      <h2>${esc(t.name)}</h2>
+      <p>${esc(t.translation)}</p>
+    </div>
+    <div class="tags hero-tags">${gradeTag(t)}<span class="tag d${t.difficulty}">${DIFF[t.difficulty]}</span>${statusTag(t)}</div>
+    <div class="detail">${detail(t)}</div>`;
+  window.scrollTo(0, 0);
+  root.onclick = e => {
+    const vt = e.target.closest('.vt'), go = e.target.closest('[data-go]'), crumb = e.target.closest('[data-crumb]');
+    if (vt) {
+      $('.player', root).innerHTML = media(t, { i: +vt.dataset.v });
+      $$('.vt', root).forEach(b => b.classList.toggle('on', b === vt));
+    } else if (go) showDetail(root, go.dataset.go);
+    else if (e.target.closest('.back')) { library(root); window.scrollTo(0, libScroll); }
+    else if (crumb) {
+      e.preventDefault();
+      const [cat = '', sub = ''] = crumb.dataset.crumb.split('|');
+      Object.assign(filters, { category: cat, subcategory: sub });
+      library(root); window.scrollTo(0, 0);
+    }
+  };
+}
+
 function detail(t) {
   const link = id => byId[id] ? `<button class="chip link" data-go="${id}">${esc(byId[id].name)}</button>` : '';
   const links = (label, ids) => ids?.length ? `<div class="links"><span class="muted">${label}</span>${ids.map(link).join('')}</div>` : '';
@@ -168,54 +279,8 @@ function detail(t) {
     ${sec('Common mistakes', ul(t.mistakes.map(m => `<li><b>✗ ${esc(m.mistake)}</b><br>✓ ${esc(m.fix)}</li>`)))}
     ${sec('When to use', t.when ? `<p>${esc(t.when)}</p>` : '')}
     ${links('Set up with', t.setups)}${links('Follow up with', t.followUps)}${links('Countered by', t.counters)}${links('Related', t.related)}
-    <p class="muted small">${esc(t.category)} › ${esc(t.subcategory)} · taught at ${esc(t.grades.join(', ') || '—')}
+    <p class="muted small">Taught at ${esc(t.grades.join(', ') || '—')}
       ${t.source ? ` · Source: <a href="${esc(t.source)}" target="_blank" rel="noopener">judolearn.com</a>` : ''}</p>`;
-}
-
-function library(root) {
-  root.innerHTML = `<div class="fbar"></div><p class="muted count"></p><div class="list"></div>`;
-  const draw = full => {
-    if (full) { $('.fbar', root).innerHTML = filterBar(); bindFilters(root, draw); }
-    const list = applyFilters();
-    $('.count', root).textContent = `${list.length} of ${T.length} techniques`;
-    $('.list', root).innerHTML = list.map(t => `
-      <details class="tech" data-id="${t.id}">
-        <summary>
-          <span class="title"><span class="kanji">${esc(t.kanji)}</span><span><b>${esc(t.name)}</b><br><span class="muted">${esc(t.translation)}</span></span></span>
-          <span class="tags">
-            <span class="tag">${esc(t.subcategory)}</span>
-            ${gradeTag(t)}
-            <span class="tag d${t.difficulty}">${DIFF[t.difficulty]}</span>
-            <span class="tag st-${status(t.id).split(' ')[0]}">${status(t.id)}</span>
-          </span>
-        </summary>
-        <div class="body"></div>
-      </details>`).join('');
-    // Build the detail only while an entry is open, and keep just one open (keeps it fast)
-    $$('details.tech', root).forEach(d => d.ontoggle = () => {
-      if (d.open) { $$('details.tech[open]', root).forEach(o => { if (o !== d) o.open = false; }); $('.body', d).innerHTML = detail(byId[d.dataset.id]); }
-      else $('.body', d).innerHTML = '';
-    });
-  };
-  root.onclick = e => {
-    const vt = e.target.closest('.vt');
-    if (vt) {
-      const d = vt.closest('details.tech');
-      $('.player', d).innerHTML = media(byId[d.dataset.id], { i: +vt.dataset.v });
-      $$('.vt', d).forEach(b => b.classList.toggle('on', b === vt));
-    }
-    const go = e.target.closest('[data-go]');
-    if (go) openTechnique(root, draw, go.dataset.go);
-  };
-  draw(true);
-}
-
-// Jump to another technique (from "Related", "Countered by", …)
-function openTechnique(root, draw, id) {
-  if (!applyFilters().some(t => t.id === id)) { resetFilters(); draw(true); }
-  const d = $(`details.tech[data-id="${id}"]`, root);
-  d.open = true;
-  d.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
 // ============================================================
